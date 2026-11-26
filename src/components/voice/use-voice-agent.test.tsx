@@ -130,9 +130,44 @@ describe("useVoiceAgent", () => {
   it("reports a dropped connection", async () => {
     const { result } = await connected();
 
-    act(() => options?.onConnectionLost());
+    act(() => options?.onEnded("connection_lost"));
 
     expect(result.current.status).toBe("disconnected");
     expect(result.current.error).toBe("The voice connection dropped. Check your network and try again.");
+  });
+
+  it("explains an expired session instead of blaming the network", async () => {
+    const { result } = await connected();
+
+    act(() => options?.onEnded("expired"));
+
+    expect(result.current.status).toBe("disconnected");
+    expect(result.current.error).toBe("The voice session timed out. Start again when you're ready.");
+  });
+
+  it("keeps the session usable after a non-terminal error event", async () => {
+    const { result } = await connected();
+
+    act(() => options?.onEvent({ kind: "error", fatal: true }));
+
+    expect(result.current.error).toBeNull();
+    expect(result.current.phase).toBe("listening");
+  });
+
+  it("does not send tool results once the owner pressed stop", async () => {
+    let finishClose: () => void = () => undefined;
+    vi.mocked(connection.close).mockImplementation(() => new Promise<void>((resolve) => { finishClose = resolve; }));
+    const { result } = await connected();
+
+    act(() => {
+      options?.onEvent({ kind: "function_call", groupId: "g", callId: "c", name: "get_current_context", arguments: "{}" });
+      result.current.disconnect();
+      options?.onEvent({ kind: "response_done", groupId: "g" });
+    });
+    // Let the tool finish while the graceful close is still pending.
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(connection.send).not.toHaveBeenCalled();
+
+    await act(async () => { finishClose(); });
   });
 });

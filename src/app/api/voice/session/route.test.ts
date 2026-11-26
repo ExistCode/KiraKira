@@ -98,6 +98,11 @@ describe("POST /api/voice/session", () => {
     expect(mocks.createLiveVoiceSession).not.toHaveBeenCalled();
   });
 
+  it("accepts a business name of exactly 120 characters", async () => {
+    const response = await POST(request({ sdp: "v=0", businessName: "x".repeat(120) }));
+    expect(response.status).toBe(200);
+  });
+
   it("returns 400 for a non-JSON body", async () => {
     const response = await POST(new Request("http://localhost/api/voice/session", { method: "POST", body: "nope" }));
     expect(response.status).toBe(400);

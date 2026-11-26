@@ -38,16 +38,16 @@ function setup() {
     createAudioElement: () => audio as unknown as HTMLAudioElement,
   };
   const events: LiveVoiceEvent[] = [];
-  const onConnectionLost = vi.fn();
-  return { track, peer, audio, media, events, onConnectionLost };
+  const onEnded = vi.fn();
+  return { track, peer, audio, media, events, onEnded };
 }
 
 describe("connectLiveVoice", () => {
   it("negotiates through requestAnswer on an oai-events channel and forwards parsed events", async () => {
-    const { peer, media, events, onConnectionLost } = setup();
+    const { peer, media, events, onEnded } = setup();
     const requestAnswer = vi.fn(async () => ({ sdp: "answer-sdp", sessionId: "live_1" }));
 
-    const connection = await connectLiveVoice({ requestAnswer, onEvent: (event) => events.push(event), onConnectionLost, media });
+    const connection = await connectLiveVoice({ requestAnswer, onEvent: (event) => events.push(event), onEnded, media });
 
     expect(peer.channel?.label).toBe("oai-events");
     expect(requestAnswer).toHaveBeenCalledWith("offer-sdp");
@@ -59,8 +59,8 @@ describe("connectLiveVoice", () => {
   });
 
   it("only sends once the channel is open", async () => {
-    const { peer, media, onConnectionLost } = setup();
-    const connection = await connectLiveVoice({ requestAnswer: async () => ({ sdp: "a", sessionId: "s" }), onEvent: () => undefined, onConnectionLost, media });
+    const { peer, media, onEnded } = setup();
+    const connection = await connectLiveVoice({ requestAnswer: async () => ({ sdp: "a", sessionId: "s" }), onEvent: () => undefined, onEnded, media });
 
     connection.send({ type: "response.create" });
     expect(peer.channel?.sent).toEqual([]);
@@ -70,8 +70,8 @@ describe("connectLiveVoice", () => {
   });
 
   it("mutes by disabling the mic track and telling the session", async () => {
-    const { peer, track, media, onConnectionLost } = setup();
-    const connection = await connectLiveVoice({ requestAnswer: async () => ({ sdp: "a", sessionId: "s" }), onEvent: () => undefined, onConnectionLost, media });
+    const { peer, track, media, onEnded } = setup();
+    const connection = await connectLiveVoice({ requestAnswer: async () => ({ sdp: "a", sessionId: "s" }), onEvent: () => undefined, onEnded, media });
     peer.channel?.open();
 
     connection.setMuted(true);
@@ -83,8 +83,8 @@ describe("connectLiveVoice", () => {
   });
 
   it("closes gracefully once, after session.closed arrives", async () => {
-    const { peer, track, audio, media, onConnectionLost } = setup();
-    const connection = await connectLiveVoice({ requestAnswer: async () => ({ sdp: "a", sessionId: "s" }), onEvent: () => undefined, onConnectionLost, media });
+    const { peer, track, audio, media, onEnded } = setup();
+    const connection = await connectLiveVoice({ requestAnswer: async () => ({ sdp: "a", sessionId: "s" }), onEvent: () => undefined, onEnded, media });
     peer.channel?.open();
 
     const closing = connection.close();
@@ -97,15 +97,15 @@ describe("connectLiveVoice", () => {
     expect(peer.close).toHaveBeenCalledTimes(1);
     expect(audio.srcObject).toBeNull();
     expect(peer.channel?.sent).toHaveLength(1);
-    expect(onConnectionLost).not.toHaveBeenCalled();
+    expect(onEnded).not.toHaveBeenCalled();
   });
 
   it("cleans up and rejects when the answer request fails", async () => {
-    const { peer, track, media, onConnectionLost } = setup();
+    const { peer, track, media, onEnded } = setup();
     await expect(connectLiveVoice({
       requestAnswer: async () => { throw new Error("401"); },
       onEvent: () => undefined,
-      onConnectionLost,
+      onEnded,
       media,
     })).rejects.toThrow("401");
     expect(track.stop).toHaveBeenCalled();
@@ -113,10 +113,67 @@ describe("connectLiveVoice", () => {
   });
 
   it("reports a failed peer connection as lost", async () => {
-    const { peer, media, onConnectionLost } = setup();
-    await connectLiveVoice({ requestAnswer: async () => ({ sdp: "a", sessionId: "s" }), onEvent: () => undefined, onConnectionLost, media });
+    const { peer, media, onEnded } = setup();
+    await connectLiveVoice({ requestAnswer: async () => ({ sdp: "a", sessionId: "s" }), onEvent: () => undefined, onEnded, media });
     peer.connectionState = "failed";
     peer.dispatchEvent(new Event("connectionstatechange"));
-    expect(onConnectionLost).toHaveBeenCalledTimes(1);
+    expect(onEnded).toHaveBeenCalledTimes(1);
+    expect(onEnded).toHaveBeenCalledWith("connection_lost");
+  });
+
+  it("ends once with the server's reason when the session closes itself", async () => {
+    const { peer, track, media, onEnded } = setup();
+    await connectLiveVoice({ requestAnswer: async () => ({ sdp: "a", sessionId: "s" }), onEvent: () => undefined, onEnded, media });
+    peer.channel?.open();
+
+    peer.channel?.receive({ type: "session.closed", event_id: "e", reason: "expired" });
+    peer.channel?.dispatchEvent(new Event("close"));
+
+    expect(onEnded).toHaveBeenCalledTimes(1);
+    expect(onEnded).toHaveBeenCalledWith("expired");
+    expect(track.stop).toHaveBeenCalled();
+    expect(peer.close).toHaveBeenCalled();
+  });
+
+  it("drops app events once closing has started", async () => {
+    const { peer, media, onEnded } = setup();
+    const connection = await connectLiveVoice({ requestAnswer: async () => ({ sdp: "a", sessionId: "s" }), onEvent: () => undefined, onEnded, media });
+    peer.channel?.open();
+
+    const closing = connection.close();
+    connection.send({ type: "response.create" });
+    peer.channel?.receive({ type: "session.closed", event_id: "e", reason: "close_requested" });
+    await closing;
+
+    expect(peer.channel?.sent).toEqual([{ type: "session.close" }]);
+    expect(onEnded).not.toHaveBeenCalled();
+  });
+
+  it("does not create a peer connection when the microphone is blocked", async () => {
+    const { media, onEnded } = setup();
+    const createPeerConnection = vi.fn(media.createPeerConnection);
+    const blocked: LiveMedia = {
+      ...media,
+      createPeerConnection,
+      getUserMedia: async () => { throw new DOMException("denied", "NotAllowedError"); },
+    };
+    await expect(connectLiveVoice({ requestAnswer: async () => ({ sdp: "a", sessionId: "s" }), onEvent: () => undefined, onEnded, media: blocked }))
+      .rejects.toMatchObject({ name: "NotAllowedError" });
+    expect(createPeerConnection).not.toHaveBeenCalled();
+  });
+
+  it("offers the gathered candidates when ICE gathering never completes", async () => {
+    vi.useFakeTimers();
+    try {
+      const { peer, media, onEnded } = setup();
+      peer.iceGatheringState = "gathering";
+      const requestAnswer = vi.fn(async () => ({ sdp: "a", sessionId: "s" }));
+      const pending = connectLiveVoice({ requestAnswer, onEvent: () => undefined, onEnded, media });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await pending;
+      expect(requestAnswer).toHaveBeenCalledWith("offer-sdp");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

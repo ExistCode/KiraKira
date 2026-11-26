@@ -33,8 +33,10 @@
 | `session.input_transcript.delta` / `session.output_transcript.delta` | Streamed into captions; a speaker change saves the finished turn |
 | `response.event` → `response.output_item.done` (`function_call`) | Queued per `delegation_id` |
 | `response.event` → `response.completed` / `failed` / `incomplete` | Runs queued calls, then sends one `function_call_output` per call and a single `response.create` |
-| `session.closed` | Explains `expired` / `content` / `connection_lost` to the owner |
-| `error` | `responses_validation_failed` is non-fatal; others surface a recovery message |
+| `session.closed` | When the app did not ask to close, the client releases the mic and reports the reason once; the UI explains `expired` / `content` / `connection_lost` |
+| `error` | Logged only; errors do not end a Live session, so the conversation stays usable |
+
+Once the owner presses Stop, the client drops every event except `session.close`, so tool results that finish late never reach the session.
 
 Tool arguments are untrusted model output: malformed JSON or unknown tool names return short spoken-friendly copy instead of running anything, and every handler validates its parameters with Zod.
 

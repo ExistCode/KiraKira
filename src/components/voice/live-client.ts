@@ -14,7 +14,7 @@ export interface LiveMedia {
 
 export interface LiveVoiceConnection {
   sessionId: string;
-  /** Sends a client event; dropped unless the data channel is open. */
+  /** Sends a client event; dropped unless the channel is open and the session is not closing. */
   send(event: ClientEvent): void;
   setMuted(muted: boolean): void;
   /** Current mic / assistant level, 0–1. */
@@ -28,8 +28,11 @@ export interface ConnectLiveVoiceOptions {
   /** Exchanges the local SDP offer for the session's SDP answer (via our server). */
   requestAnswer(offerSdp: string): Promise<{ sdp: string; sessionId: string }>;
   onEvent(event: LiveVoiceEvent): void;
-  /** Called when the connection drops without the app asking to close. */
-  onConnectionLost(): void;
+  /**
+   * Called once when the session ends without the app asking to close: the
+   * server's `session.closed` reason (e.g. `expired`), or `connection_lost`.
+   */
+  onEnded(reason: string): void;
   media?: LiveMedia;
 }
 
@@ -104,12 +107,13 @@ export async function connectLiveVoice(options: ConnectLiveVoiceOptions): Promis
     audio.srcObject = null;
   };
 
-  const lost = () => {
+  const end = (reason: string) => {
     if (closing) return;
     closing = true;
     release();
-    options.onConnectionLost();
+    options.onEnded(reason);
   };
+  const lost = () => end("connection_lost");
 
   try {
     microphone = await media.getUserMedia({ audio: true });
@@ -135,8 +139,11 @@ export async function connectLiveVoice(options: ConnectLiveVoiceOptions): Promis
       if (typeof message.data !== "string") return;
       const event = parseLiveServerEvent(message.data);
       if (!event) return;
-      if (event.kind === "closed") resolveClosed?.();
       options.onEvent(event);
+      if (event.kind !== "closed") return;
+      // An app-requested close waits for this; otherwise the server ended the session.
+      if (resolveClosed) resolveClosed();
+      else end(event.reason ?? "connection_lost");
     });
     channel.addEventListener("close", () => lost());
 
@@ -147,8 +154,12 @@ export async function connectLiveVoice(options: ConnectLiveVoiceOptions): Promis
     const answer = await options.requestAnswer(offerSdp);
     await activePeer.setRemoteDescription({ type: "answer", sdp: answer.sdp });
 
-    const send = (event: ClientEvent) => {
+    const rawSend = (event: ClientEvent) => {
       if (channel?.readyState === "open") channel.send(JSON.stringify(event));
+    };
+    // Once closing starts, late tool results must not reach the session.
+    const send = (event: ClientEvent) => {
+      if (!closing) rawSend(event);
     };
 
     return {
@@ -171,7 +182,7 @@ export async function connectLiveVoice(options: ConnectLiveVoiceOptions): Promis
             await new Promise<void>((resolve) => {
               const timer = setTimeout(resolve, GRACEFUL_CLOSE_TIMEOUT_MS);
               resolveClosed = () => { clearTimeout(timer); resolve(); };
-              send({ type: "session.close" });
+              rawSend({ type: "session.close" });
             });
           }
           release();

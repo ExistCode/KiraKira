@@ -192,7 +192,7 @@ export function useVoiceAgent(): UseVoiceAgentResult {
     toolQueueRef.current = toolQueueRef.current.then(async () => {
       const results = await runToolCalls(calls, toolsRef.current);
       // The owner may have stopped the session while tools were running.
-      if (!owner || connectionRef.current !== owner) return;
+      if (!owner || connectionRef.current !== owner || endInFlightRef.current) return;
       for (const event of toolResultEvents(results)) owner.send(event);
     }).catch(() => undefined);
   }, []);
@@ -241,14 +241,13 @@ export function useVoiceAgent(): UseVoiceAgentResult {
       case "response_done":
         runPendingTools(event.groupId);
         return;
-      case "closed": {
-        const message = event.reason ? CLOSE_REASON_COPY[event.reason] : undefined;
-        if (message) setError(message);
+      case "closed":
+        // Server-initiated endings arrive through `onEnded`, which owns teardown.
         return;
-      }
       case "error":
-        console.error("[voice] session error", { fatal: event.fatal });
-        if (event.fatal) setError("The voice assistant hit a problem. Please start again.");
+        // Error events do not end a Live session; `session.closed` does. Log the
+        // classification only and keep the conversation usable.
+        console.warn("[voice] session error", { fatal: event.fatal });
         return;
     }
   }, [clearSpeaking, queueTranscriptTurn, runPendingTools]);
@@ -378,10 +377,11 @@ export function useVoiceAgent(): UseVoiceAgentResult {
           return { sdp: body.sdp, sessionId: body.sessionId };
         },
         onEvent: handleEvent,
-        onConnectionLost: () => {
+        onEnded: (reason) => {
           if (endInFlightRef.current) return;
-          setError("The voice connection dropped. Check your network and try again.");
-          endTranscript("failed");
+          const message = CLOSE_REASON_COPY[reason];
+          if (message) setError(message);
+          endTranscript(reason === "connection_lost" || reason === "content" ? "failed" : "completed");
           settleDisconnected();
         },
       });
