@@ -95,7 +95,7 @@ describe("useVoiceAgent", () => {
         name: "create_transaction_draft",
         arguments: JSON.stringify({ type: "income", amount: 45, description: "nasi lemak" }),
       });
-      options?.onEvent({ kind: "response_done", groupId: "item_1" });
+      options?.onEvent({ kind: "response_done", groupId: "item_1", completed: true });
     });
 
     await waitFor(() => expect(connection.send).toHaveBeenCalledTimes(2));
@@ -105,6 +105,30 @@ describe("useVoiceAgent", () => {
       item: { type: "function_call_output", call_id: "call_1" },
     });
     expect(vi.mocked(connection.send).mock.calls[1][0]).toEqual({ type: "response.create" });
+  });
+
+  it("drops tool calls from a response that failed or was cut short", async () => {
+    await connected();
+
+    act(() => {
+      options?.onEvent({
+        kind: "function_call",
+        groupId: "item_2",
+        callId: "call_2",
+        name: "create_transaction_draft",
+        arguments: JSON.stringify({ type: "income", amount: 45, description: "nasi lemak" }),
+      });
+      options?.onEvent({ kind: "response_done", groupId: "item_2", completed: false });
+    });
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+    expect(useVoiceDraftStore.getState().transaction).toBeNull();
+    expect(connection.send).not.toHaveBeenCalled();
+
+    // A later completed response in the same group must not replay the dropped call.
+    act(() => options?.onEvent({ kind: "response_done", groupId: "item_2", completed: true }));
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(useVoiceDraftStore.getState().transaction).toBeNull();
   });
 
   it("explains a 401 from the session route", async () => {
@@ -162,7 +186,7 @@ describe("useVoiceAgent", () => {
     act(() => {
       options?.onEvent({ kind: "function_call", groupId: "g", callId: "c", name: "get_current_context", arguments: "{}" });
       result.current.disconnect();
-      options?.onEvent({ kind: "response_done", groupId: "g" });
+      options?.onEvent({ kind: "response_done", groupId: "g", completed: true });
     });
     // Let the tool finish while the graceful close is still pending.
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });

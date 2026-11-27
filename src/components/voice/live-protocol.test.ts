@@ -44,9 +44,13 @@ describe("parseLiveServerEvent", () => {
     expect(parseLiveServerEvent(event)).toMatchObject({ kind: "function_call", groupId: "default" });
   });
 
-  it.each(["response.completed", "response.failed", "response.incomplete"])("maps nested %s to response_done", (type) => {
+  it.each([
+    ["response.completed", true],
+    ["response.failed", false],
+    ["response.incomplete", false],
+  ])("maps nested %s to response_done (completed: %s)", (type, completed) => {
     expect(parseLiveServerEvent(raw({ type: "response.event", event_id: "e", delegation_id: "item_9", event: { type } })))
-      .toEqual({ kind: "response_done", groupId: "item_9" });
+      .toEqual({ kind: "response_done", groupId: "item_9", completed });
   });
 
   it("ignores non-function output items", () => {

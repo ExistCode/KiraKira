@@ -6,7 +6,8 @@ export type LiveVoiceEvent =
   | { kind: "started"; sessionId: string }
   | { kind: "transcript"; role: "user" | "assistant"; delta: string }
   | { kind: "function_call"; groupId: string; callId: string; name: string; arguments: string }
-  | { kind: "response_done"; groupId: string }
+  /** `completed` is false when the delegated response failed or was cut short. */
+  | { kind: "response_done"; groupId: string; completed: boolean }
   | { kind: "closed"; reason: string | null }
   | { kind: "error"; fatal: boolean };
 
@@ -77,7 +78,10 @@ export function parseLiveServerEvent(raw: string): LiveVoiceEvent | null {
       const parsed = responseEventSchema.safeParse(value);
       if (!parsed.success) return null;
       const groupId = parsed.data.delegation_id ?? DEFAULT_GROUP;
-      if (RESPONSE_DONE_TYPES.has(parsed.data.event.type)) return { kind: "response_done", groupId };
+      const eventType = parsed.data.event.type;
+      if (RESPONSE_DONE_TYPES.has(eventType)) {
+        return { kind: "response_done", groupId, completed: eventType === "response.completed" };
+      }
       const call = functionCallItemSchema.safeParse(parsed.data.event);
       if (!call.success) return null;
       const { call_id: callId, name, arguments: args } = call.data.item;

@@ -239,7 +239,13 @@ export function useVoiceAgent(): UseVoiceAgentResult {
         return;
       }
       case "response_done":
-        runPendingTools(event.groupId);
+        if (event.completed) {
+          runPendingTools(event.groupId);
+        } else {
+          // A failed or truncated response may carry half-formed intent (e.g. a
+          // confirm call the owner never approved); discard rather than act on it.
+          pendingCallsRef.current.delete(event.groupId);
+        }
         return;
       case "closed":
         // Server-initiated endings arrive through `onEnded`, which owns teardown.
