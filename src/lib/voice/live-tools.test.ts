@@ -43,6 +43,10 @@ describe("VOICE_LIVE_TOOLS", () => {
     expect(declaredNames).toEqual(runtimeToolNames);
   });
 
+  it("contains no unfilled template placeholders", () => {
+    expect(JSON.stringify(VOICE_LIVE_TOOLS)).not.toContain("{{");
+  });
+
   it("has no duplicate names", () => {
     expect(new Set(declaredNames).size).toBe(declaredNames.length);
   });

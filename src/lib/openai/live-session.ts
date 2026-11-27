@@ -52,6 +52,10 @@ export async function createLiveVoiceSession(
           type: "responses",
           responses: {
             model: delegationModel,
+            // The delegated model is the one that calls the bookkeeping tools, so it
+            // needs the confirm-before-save rules and today's date too; Live
+            // instructions alone do not reach it.
+            instructions: input.instructions,
             tools: [...VOICE_LIVE_TOOLS],
             tool_choice: "auto",
             parallel_tool_calls: true,

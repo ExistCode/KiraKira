@@ -39,7 +39,7 @@ export const VOICE_LIVE_TOOLS: readonly FunctionTool[] = [
         },
         "date": {
           "type": "string",
-          "description": "ISO date YYYY-MM-DD. Resolve relative dates against {{today}} in Asia/Kuala_Lumpur."
+          "description": "ISO date YYYY-MM-DD. Resolve relative dates against today's date from your instructions (Asia/Kuala_Lumpur)."
         },
         "taxRate": {
           "type": "number",
